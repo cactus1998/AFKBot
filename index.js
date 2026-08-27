@@ -1,7 +1,6 @@
 require('dotenv').config();
 const { Client, GatewayIntentBits, SlashCommandBuilder, PermissionFlagsBits, ChannelType, Events } = require('discord.js');
-const { joinVoiceChannel, getVoiceConnection, VoiceConnectionStatus, entersState, createAudioPlayer, createAudioResource, StreamType } = require('@discordjs/voice');
-const { Readable } = require('stream');
+const { joinVoiceChannel, getVoiceConnection, VoiceConnectionStatus, entersState } = require('@discordjs/voice');
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -21,13 +20,6 @@ function saveData(data) {
     fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
 }
 
-// 產生無限的靜音 (Opus frame)
-class Silence extends Readable {
-    _read() {
-        this.push(Buffer.from([0xf8, 0xff, 0xfe]));
-    }
-}
-
 // =========================================================
 // 建立一個簡單的網頁伺服器
 const server = http.createServer((req, res) => {
@@ -44,6 +36,7 @@ const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildVoiceStates,
+        GatewayIntentBits.GuildMessages, // 加入發送訊息的 intent
     ],
 });
 
@@ -74,11 +67,6 @@ function connectToChannel(channel) {
         selfMute: false
     });
 
-    // 持續播放無聲的音訊，防止被 Discord 因為閒置而踢出
-    const player = createAudioPlayer();
-    connection.subscribe(player);
-    player.play(createAudioResource(new Silence(), { inputType: StreamType.Opus }));
-
     connection.on(VoiceConnectionStatus.Disconnected, async (oldState, newState) => {
         try {
             // 等待一下看是否能自動重連 (例如伺服器切換)
@@ -88,12 +76,23 @@ function connectToChannel(channel) {
             ]);
         } catch (error) {
             console.log(`[中斷連線] 嘗試重新連接 ${channel.name}...`);
-            // 若為真正斷線，手動重連
+            
+            // 若為真正斷線，必須先銷毀原本的無效連線，否則無法重連！
+            connection.destroy();
+            
             const data = loadData();
             if (data[channel.guild.id] === channel.id) {
-                connectToChannel(channel);
-            } else {
-                connection.destroy();
+                // 如果真的斷開離開了，發送被強迫離開的提示訊息
+                try {
+                    await channel.send('⚠️ **機器人已被強迫離開頻道 (可能因 Discord 閒置或網路中斷)！** 正在嘗試自動重連...');
+                } catch (e) {
+                    console.error('無法發送離開訊息:', e);
+                }
+                
+                // 延遲 2 秒後再次強制加入
+                setTimeout(() => {
+                    connectToChannel(channel);
+                }, 2000);
             }
         }
     });
@@ -115,7 +114,7 @@ client.once(Events.ClientReady, async (c) => {
         console.error('註冊斜線指令時發生錯誤:', error);
     }
 
-    // 自動重連先前儲存的頻道 (解決重啟後離開頻道的問題)
+    // 自動重連先前儲存的頻道
     const data = loadData();
     for (const guildId in data) {
         const channelId = data[guildId];
