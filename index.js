@@ -115,18 +115,34 @@ client.once(Events.ClientReady, async (c) => {
     }
 
     // 自動重連先前儲存的頻道
-    const data = loadData();
-    for (const guildId in data) {
-        const channelId = data[guildId];
+    const envChannelId = process.env.VOICE_CHANNEL_ID;
+    
+    if (envChannelId) {
+        // 如果有在 Render 設定環境變數，絕對不會被刪除！
         try {
-            const guild = await client.guilds.fetch(guildId);
-            const channel = await guild.channels.fetch(channelId);
-            if (channel) {
+            const channel = await client.channels.fetch(envChannelId);
+            if (channel && channel.isVoiceBased()) {
                 connectToChannel(channel);
-                console.log(`🔄 [自動重連] 已重新加入語音頻道：${channel.name}`);
+                console.log(`🔄 [環境變數重連] 已重新加入語音頻道：${channel.name}`);
             }
         } catch (err) {
-            console.error(`自動加入頻道失敗 (${guildId}):`, err);
+            console.error(`無法透過環境變數加入頻道 (${envChannelId}):`, err);
+        }
+    } else {
+        // 備用方案：讀取本地 data.json (但在 Render 會被刪除)
+        const data = loadData();
+        for (const guildId in data) {
+            const channelId = data[guildId];
+            try {
+                const guild = await client.guilds.fetch(guildId);
+                const channel = await guild.channels.fetch(channelId);
+                if (channel) {
+                    connectToChannel(channel);
+                    console.log(`🔄 [本地紀錄重連] 已重新加入語音頻道：${channel.name}`);
+                }
+            } catch (err) {
+                console.error(`自動加入頻道失敗 (${guildId}):`, err);
+            }
         }
     }
 });
