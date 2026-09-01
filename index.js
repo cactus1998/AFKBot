@@ -143,6 +143,10 @@ client.once(Events.ClientReady, async (c) => {
     console.log(`已成功登入為 ${c.user.tag}!`);
     console.log(`語音掛機機器人已啟動。`);
 
+    // 設定機器人狀態與版本號
+    const BOT_VERSION = '1.0';
+    c.user.setActivity(`掛機專用 浪漫開發 v${BOT_VERSION}`);
+
     try {
         console.log('正在為伺服器註冊斜線指令 (/) ...');
         for (const guild of client.guilds.cache.values()) {
