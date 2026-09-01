@@ -1,6 +1,13 @@
 require('dotenv').config();
 const { Client, GatewayIntentBits, SlashCommandBuilder, PermissionFlagsBits, ChannelType, Events } = require('discord.js');
-const { joinVoiceChannel, getVoiceConnection, VoiceConnectionStatus, entersState } = require('@discordjs/voice');
+const { joinVoiceChannel, getVoiceConnection, VoiceConnectionStatus, entersState, createAudioPlayer, createAudioResource, StreamType, NoSubscriberBehavior } = require('@discordjs/voice');
+const { Readable } = require('stream');
+
+class Silence extends Readable {
+    _read() {
+        this.push(Buffer.from([0xf8, 0xff, 0xfe]));
+    }
+}
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -67,6 +74,11 @@ function connectToChannel(channel) {
         selfMute: false
     });
 
+    // 捕捉連線錯誤 (例如 522 Timeout)，避免直接導致程式崩潰 (Exit status 1)
+    connection.on('error', (error) => {
+        console.error(`[語音連線發生錯誤] 頻道 ${channel.name}:`, error.message);
+    });
+
     connection.on(VoiceConnectionStatus.Disconnected, async (oldState, newState) => {
         try {
             // 等待一下看是否能自動重連 (例如伺服器切換)
@@ -96,6 +108,33 @@ function connectToChannel(channel) {
             }
         }
     });
+
+    // 播放無聲音訊，防止 Discord 因為閒置過久而自動踢除機器人
+    const player = createAudioPlayer({
+        behaviors: {
+            noSubscriber: NoSubscriberBehavior.Play,
+        },
+    });
+    
+    // 建立無聲音訊資源並播放
+    const playSilence = () => {
+        const resource = createAudioResource(new Silence(), { inputType: StreamType.Opus });
+        player.play(resource);
+    };
+
+    player.on('stateChange', (oldState, newState) => {
+        // 當播放結束或變為 idle 時，自動重新播放無聲音訊
+        if (newState.status === 'idle') {
+            playSilence();
+        }
+    });
+
+    player.on('error', error => {
+        console.error('Audio player error:', error.message);
+    });
+
+    connection.subscribe(player);
+    playSilence();
 
     return connection;
 }
@@ -202,6 +241,23 @@ client.on(Events.InteractionCreate, async interaction => {
         connection.destroy();
         await interaction.reply('✅ 已退出語音頻道。');
     }
+});
+
+// 捕捉 Render 強制關機的訊號 (SIGTERM)
+process.on('SIGTERM', async () => {
+    console.log('接收到 Render 的關機訊號，準備關閉...');
+    const envChannelId = process.env.VOICE_CHANNEL_ID;
+    if (envChannelId) {
+        try {
+            const channel = await client.channels.fetch(envChannelId);
+            if (channel) {
+                await channel.send('⚠️ **主機 (Render) 進入強制休眠，機器人被迫斷線！** 等待喚醒中...');
+            }
+        } catch (e) {
+            console.error(e);
+        }
+    }
+    process.exit(0);
 });
 
 client.login(process.env.TOKEN);
