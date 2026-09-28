@@ -73,12 +73,18 @@ function getHealth() {
 
 // =========================================================
 // 建立一個簡單的網頁伺服器
-// 機器人或語音連線異常時回傳 503，讓 cron-job.org 能發現並通知
+// /        永遠回傳 200，給 cron-job.org 喚醒用 (連續失敗會被 cron-job.org 自動停用)
+// /health  機器人或語音連線異常時回傳 503，給監控用
 const server = http.createServer((req, res) => {
+    if (!req.url.startsWith('/health')) {
+        res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('Bot is running and alive!');
+        return;
+    }
     const problems = getHealth();
     if (problems.length === 0) {
         res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-        res.end('Bot is running and alive!');
+        res.end('Bot is healthy');
     } else {
         res.writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8' });
         res.end(`Bot unhealthy:\n${problems.join('\n')}`);
@@ -88,6 +94,21 @@ const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
     console.log(`喚醒用網頁伺服器已啟動於 port ${PORT}`);
 });
+
+// 自我喚醒：每 10 分鐘從公開網址打自己一次，避免 Render 免費方案閒置 15 分鐘後休眠
+// 只是 cron-job.org 之外的第二道保險，instance 真的掛掉時仍需靠外部喚醒
+const SELF_PING_INTERVAL_MS = 10 * 60_000;
+const selfUrl = process.env.RENDER_EXTERNAL_URL;
+if (selfUrl) {
+    setInterval(async () => {
+        try {
+            const res = await fetch(selfUrl);
+            if (!res.ok) console.log(`[自我喚醒] 回應 ${res.status}`);
+        } catch (error) {
+            console.log(`[自我喚醒] 失敗: ${error.message}`);
+        }
+    }, SELF_PING_INTERVAL_MS);
+}
 // =========================================================
 
 const commands = [
@@ -259,7 +280,7 @@ client.once(Events.ClientReady, async (c) => {
     console.log(`語音掛機機器人已啟動。`);
 
     // 設定機器人狀態與版本號
-    const BOT_VERSION = '1.1';
+    const BOT_VERSION = '1.2';
     c.user.setActivity(`掛機專用 浪漫開發 v${BOT_VERSION}`);
 
     try {
